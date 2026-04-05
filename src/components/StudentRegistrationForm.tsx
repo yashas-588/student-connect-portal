@@ -1,14 +1,15 @@
 import { useState } from "react";
-import { User, Mail, Phone, Users, GraduationCap } from "lucide-react";
+import { User, Mail, Phone, Users, GraduationCap, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import WebcamCapture from "./WebcamCapture";
-import { db } from "@/lib/firebase";
+import MultiWebcamCapture from "./MultiWebcamCapture";
+import { db, storage } from "@/lib/firebase";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { ref, uploadString, getDownloadURL } from "firebase/storage";
 
 interface FormData {
   studentName: string;
@@ -19,7 +20,6 @@ interface FormData {
   parentName: string;
   parentEmail: string;
   parentPhone: string;
-  photo: string;
 }
 
 const initialForm: FormData = {
@@ -31,11 +31,11 @@ const initialForm: FormData = {
   parentName: "",
   parentEmail: "",
   parentPhone: "",
-  photo: "",
 };
 
 const StudentRegistrationForm = () => {
   const [form, setForm] = useState<FormData>(initialForm);
+  const [photos, setPhotos] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
   const handleChange = (field: keyof FormData) => (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -44,23 +44,47 @@ const StudentRegistrationForm = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.studentName || !form.studentEmail || !form.studentPhone) {
+    if (!form.studentName || !form.studentEmail || !form.studentPhone || !form.rollNumber) {
       toast.error("Please fill in all required student fields.");
       return;
     }
-    if (!form.photo) {
-      toast.error("Please capture a photo of the student.");
+    if (photos.length < 5) {
+      toast.error("Please capture all 5 photos of the student.");
       return;
     }
+
     setSubmitting(true);
     try {
+      // Upload images to Firebase Storage under dataset/{name}/
+      const folderName = form.studentName.trim().replace(/\s+/g, "_");
+      const imageUrls: string[] = [];
+
+      for (let i = 0; i < photos.length; i++) {
+        const imageRef = ref(storage, `dataset/${folderName}/photo_${i + 1}.jpg`);
+        await uploadString(imageRef, photos[i], "data_url");
+        const url = await getDownloadURL(imageRef);
+        imageUrls.push(url);
+      }
+
+      // Save student details to Firestore
       await addDoc(collection(db, "students"), {
-        ...form,
+        name: form.studentName,
+        email: form.studentEmail,
+        phone: form.studentPhone,
+        rollNumber: form.rollNumber,
+        department: form.department,
+        parentName: form.parentName,
+        parentEmail: form.parentEmail,
+        parentPhone: form.parentPhone,
+        photos: imageUrls,
         createdAt: serverTimestamp(),
       });
-      toast.success("Student registered successfully!");
+
+      toast.success("Student registered successfully! 🎉");
       setForm(initialForm);
-    } catch {
+      setPhotos([]);
+    } catch (err) {
+      console.error("Registration error:", err);
       toast.error("Failed to register. Please try again.");
     } finally {
       setSubmitting(false);
@@ -68,20 +92,27 @@ const StudentRegistrationForm = () => {
   };
 
   return (
-    <Card className="w-full max-w-2xl border-border/50 shadow-lg">
+    <Card className="w-full max-w-2xl border-border/50 shadow-lg bg-card/40 backdrop-blur-xl">
       <CardHeader className="text-center pb-2">
         <div className="mx-auto w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-3">
           <GraduationCap className="w-6 h-6 text-primary" />
         </div>
         <CardTitle className="text-2xl font-bold">Student Registration</CardTitle>
-        <CardDescription>Capture student details and photo for smart attendance</CardDescription>
+        <CardDescription>Capture 5 photos and student details for face recognition</CardDescription>
       </CardHeader>
 
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Photo */}
-          <div className="flex justify-center">
-            <WebcamCapture onCapture={(img) => setForm((p) => ({ ...p, photo: img }))} capturedImage={form.photo || null} />
+          {/* Multi Photo Capture */}
+          <div>
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
+              📸 Face Photos (5 required)
+            </h3>
+            <MultiWebcamCapture
+              maxCaptures={5}
+              capturedImages={photos}
+              onImagesChange={setPhotos}
+            />
           </div>
 
           <Separator />
@@ -97,7 +128,7 @@ const StudentRegistrationForm = () => {
                 <Input id="studentName" placeholder="John Doe" value={form.studentName} onChange={handleChange("studentName")} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="rollNumber">Roll Number</Label>
+                <Label htmlFor="rollNumber">Roll Number *</Label>
                 <Input id="rollNumber" placeholder="CS2024001" value={form.rollNumber} onChange={handleChange("rollNumber")} />
               </div>
               <div className="space-y-1.5">
@@ -150,8 +181,14 @@ const StudentRegistrationForm = () => {
             </div>
           </div>
 
-          <Button type="submit" className="w-full h-12 text-base font-semibold" disabled={submitting}>
-            {submitting ? "Registering..." : "Register Student"}
+          <Button type="submit" className="w-full h-12 text-base font-semibold" disabled={submitting || photos.length < 5}>
+            {submitting ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Uploading & Registering...
+              </>
+            ) : (
+              "Register Student"
+            )}
           </Button>
         </form>
       </CardContent>
